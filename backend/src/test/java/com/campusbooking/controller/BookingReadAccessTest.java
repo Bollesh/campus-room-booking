@@ -1,6 +1,9 @@
 package com.campusbooking.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.everyItem;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.is;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -54,6 +57,36 @@ class BookingReadAccessTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(body).doesNotContain("password").doesNotContain("$2a$");
+    }
+
+    @Test
+    @WithUserDetails("poc.student2@example.com")
+    void studentCannotListAnotherStudentsBookings() throws Exception {
+        mockMvc.perform(get("/api/bookings").param("studentEmail", "poc.student1@example.com"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithUserDetails("poc.student1@example.com")
+    void studentCanListOwnBookings() throws Exception {
+        mockMvc.perform(get("/api/bookings").param("studentEmail", "poc.student1@example.com"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(jsonPath("$[*].studentEmail", everyItem(is("poc.student1@example.com"))));
+    }
+
+    @Test
+    @WithUserDetails("poc.student1@example.com")
+    void studentCannotListAllBookings() throws Exception {
+        mockMvc.perform(get("/api/bookings")).andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithUserDetails("floor.manager1@example.com")
+    void approverCanListAllBookings() throws Exception {
+        mockMvc.perform(get("/api/bookings"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(2)));
     }
 
     @Test

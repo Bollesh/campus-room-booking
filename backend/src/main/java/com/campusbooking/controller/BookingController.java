@@ -45,9 +45,12 @@ public class BookingController {
         this.bookingService = bookingService;
     }
 
-    // GET /api/bookings - Retrieve all bookings
+    // GET /api/bookings - Retrieve all bookings (approver roles only; students list their own)
     @GetMapping
-    public List<Booking> getAllBookings() {
+    public List<Booking> getAllBookings(@AuthenticationPrincipal UserDetails caller) {
+        if (isStudent(caller)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Students can only list their own bookings (?studentEmail=).");
+        }
         return bookingService.getAllBookings();
     }
 
@@ -70,8 +73,17 @@ public class BookingController {
     }
 
     @GetMapping(params = "studentEmail")
-    public List<Booking> getBookingsByStudentEmail(@RequestParam String studentEmail) {
+    public List<Booking> getBookingsByStudentEmail(@RequestParam String studentEmail,
+                                                   @AuthenticationPrincipal UserDetails caller) {
+        if (isStudent(caller) && !caller.getUsername().equals(studentEmail)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Students can only list their own bookings.");
+        }
         return bookingService.getBookingsByStudentEmail(studentEmail);
+    }
+
+    // Plain students (not student council, which is an approver role) see only their own bookings.
+    private static boolean isStudent(UserDetails caller) {
+        return caller.getAuthorities().stream().anyMatch(a -> "ROLE_STUDENT".equals(a.getAuthority()));
     }
 
     // POST /api/bookings - Create a new booking
