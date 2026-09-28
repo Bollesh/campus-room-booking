@@ -87,3 +87,37 @@ booking (200). All 16 tests pass with Flyway building the schema in Testcontaine
 Existing local databases created by the old `sql.init` setup have no Flyway history, and Flyway
 refuses to migrate a non-empty schema without one. Recreate them once with `docker compose down -v`
 (their data was wiped on every start anyway).
+
+## B6: password hashes in API responses
+
+Found in Step 3: the approval response body contained bcrypt hashes. Every user embedded in a
+response (booking's `student`, `room.manager`, `club.facultyHead`, `club.pocStudent`) serialized
+`Users.password`.
+
+Test: `BookingReadAccessTest`. Before the fix, `GET /api/bookings` and `GET /api/bookings/{...}`
+(as `security1`) both contained `"password"` and `$2a$` hashes. Fix: `@JsonProperty(access =
+WRITE_ONLY)` on `Users.password`. Registration + login and `POST /api/students` (entity body with a
+password) still work; tested.
+
+Side finding, not fixed: `POST /api/students` stored the body's password unhashed (`some-hash` in the
+test), and `security1` was allowed to call it. Listed under Known issues in the README.
+
+## B7: any user could list anyone's bookings
+
+Before the fix, `poc.student2` got 200 for `GET /api/bookings?studentEmail=poc.student1@...` and
+200 for the full `GET /api/bookings`. Fix: `ROLE_STUDENT` callers get 403 for both unless the email is
+their own; approver roles (including `ROLE_STUDENT_COUNCIL`) keep the full list. Only the approver
+dashboards call the full list; `studentView.jsx` asks for its own email.
+
+## Same-start-time race
+
+`BookingConcurrencyTest.concurrentBookingsWithSameStartTime_onlyOneSucceeds`: 20 concurrent requests
+with the same start time (also colliding on the PK). 4 runs: 1 of 20 succeeded, 19 got
+`BookingConflictException`. The room-row lock already covers it: the next request only runs its
+conflict SELECT after the winner commits. No separate fix.
+
+## Campus-wide approvers: decided, intended
+
+Any cultural professor, student-council member or security user can approve any booking. Kept as
+is: those are campus-wide offices and the data model doesn't tie them to a room, block or club. Each
+role still responds once per booking. Documented in the README (How it works > Roles).

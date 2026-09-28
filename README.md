@@ -117,6 +117,17 @@ member is also a `student`. At login, `UserDetailsServiceImpl` maps the account 
 Security role: `ROLE_STUDENT`, `ROLE_PROFESSOR`, `ROLE_FLOOR_MANAGER`, `ROLE_SECURITY` or
 `ROLE_STUDENT_COUNCIL`.
 
+Who may approve a booking:
+
+- **Floor manager:** only the manager of the booked room.
+- **Faculty head:** only the faculty head of the booking's club.
+- **Cultural professor, student council, security:** any holder of the role, for any booking. This
+  is intended. These are campus-wide offices, and the data model doesn't tie them to a room, block
+  or club. Each role still responds only once per booking.
+
+Students see only their own bookings (`GET /api/bookings?studentEmail=<own email>`). The full list
+(`GET /api/bookings`) is for the approver roles.
+
 ### Booking lifecycle
 
 1. A student who is a member of a club books a room for a time range (`POST /api/bookings`).
@@ -244,7 +255,8 @@ constraints, not H2. They do not use the database from `compose.yaml`.
 
 | Test | What it checks |
 |---|---|
-| `BookingConcurrencyTest` | 20 threads book the same room with overlapping times at once; exactly 1 succeeds and the other 19 get a conflict |
+| `BookingConcurrencyTest` | 20 threads book the same room with overlapping times at once (different start times, then the same start time); exactly 1 succeeds and the other 19 get a conflict |
+| `BookingReadAccessTest` | booking responses contain no password hashes; students get 403 for the full list and for another student's bookings; approvers see all; registration and login still work |
 | `BookingOverlapTest` | overlaps rejected (409 over HTTP); overlap with a rejected or cancelled booking allowed; back-to-back allowed; the database rejects an overlapping raw `INSERT` |
 | `BookingApprovalAuthTest` | approver and booking owner come from the JWT; students and floor managers of other rooms get 403; all five approvals -> `APPROVED`, one rejection -> `REJECTED` |
 | `CampusRoomBookingApplicationTests` | the application context starts |
@@ -255,9 +267,9 @@ CI (`.github/workflows/ci.yml`) runs `./mvnw -B verify` on every push and pull r
 
 The original project is by [Jawwad2005](https://github.com/Jawwad2005) and
 [ParallelParking](https://github.com/ParallelParking)
-([upstream repo](https://github.com/Jawwad2005/DBSProj)). In this fork I found four bugs by reading
-the code, confirmed each one with a test that failed before the fix, and then fixed it. Measured
-numbers and details are in [`NOTES.md`](NOTES.md).
+([upstream repo](https://github.com/Jawwad2005/DBSProj)). In this fork I found six bugs (four by
+reading the code, two more while testing those fixes), confirmed each one with a test that failed
+before the fix, and then fixed it. Measured numbers and details are in [`NOTES.md`](NOTES.md).
 
 ### 1. Double booking under concurrent requests
 
@@ -304,6 +316,30 @@ numbers and details are in [`NOTES.md`](NOTES.md).
   and triggers; `V2__no_overlapping_bookings.sql` adds the constraint from fix 1.
 - **Verified:** created a booking, restarted the app, and the booking was still there.
 
+### 5. Password hashes in API responses
+
+- **Found (while testing fix 2):** approval responses included bcrypt `password` hashes. Every
+  response that embeds a user (the student, the room's manager, the club's faculty head and point of
+  contact) serialized `Users.password`, and `GET /api/bookings` returns these to any logged-in user.
+- **Proved:** `BookingReadAccessTest`: `GET /api/bookings` and `GET /api/bookings/{...}` bodies
+  contained `password` and `$2a$...` hashes.
+- **Fixed:** `Users.password` is `@JsonProperty(access = WRITE_ONLY)`: accepted in request bodies,
+  never written out. Registration, login and the entity create endpoints still work (tested).
+
+### 6. Any user could list anyone's bookings
+
+- **Found:** `GET /api/bookings?studentEmail=` trusted the query parameter (same pattern as fix 2),
+  and plain `GET /api/bookings` returned every booking to every user.
+- **Proved:** a student got 200 for another student's bookings and for the full list.
+- **Fixed:** students get 403 for both; they can list only their own bookings. Approver roles keep
+  the full list, which their dashboards use.
+
+### Checked, not a bug
+
+- **Same-start-time race:** 20 concurrent requests with the *same* start time also collide on the
+  primary key, which would surface as a 500. With the room lock from fix 1, 1 of 20 succeeds and the
+  other 19 get a 409 (`BookingConcurrencyTest`), so no separate fix was needed.
+
 ### Also added
 
 - A test suite on real PostgreSQL via Testcontainers (see [Tests](#tests)); before, the only test
@@ -312,23 +348,23 @@ numbers and details are in [`NOTES.md`](NOTES.md).
 
 ## Known issues
 
-Still open. Items 1 and 2 were found while fixing the bugs above.
+Still open.
 
-1. **Password hashes in API responses.** Booking responses embed the student, the room's manager
-   and the club's faculty head and point of contact, and each includes its bcrypt `password` hash.
-   `GET /api/bookings` returns these to any logged-in user.
-2. **Any user can list anyone's bookings.** `GET /api/bookings?studentEmail=` trusts the query
-   parameter.
-3. **Anyone can register as any role**, including `SECURITY` and `FLOOR_MANAGER`, through the public
+1. **Anyone can register as any role**, including `SECURITY` and `FLOOR_MANAGER`, through the public
    register endpoint.
-4. **Campus-wide approvers.** Any student council member, cultural professor or security user can
-   approve any booking. This may be intended, since those roles aren't tied to a room or club.
-5. **Access rules that don't match the controllers.**
+2. **The per-role create endpoints store passwords unhashed, and any logged-in user can call them.**
+   `POST /api/students` (and `/api/professors`, `/api/floormanagers`, `/api/security`,
+   `/api/studentcouncil`) saves the `password` from the body as is, without hashing, and nothing
+   restricts who can create accounts this way. Found while testing fix 5. `/api/auth/register`
+   hashes correctly.
+3. **Single bookings are readable by anyone logged in.** `GET /api/bookings/{block}/{roomNo}/{startTime}`
+   is not restricted to the owner and approvers, unlike the lists (fix 6).
+4. **Access rules that don't match the controllers.**
    - `SecurityConfig` protects `/api/student-council/**`, but the controller is at
      `/api/studentcouncil`, so that rule never matches.
    - Student council members get only `ROLE_STUDENT_COUNCIL`, so they are refused on
      `GET /api/rooms` and `GET /api/memberships/student/**`, which require `STUDENT`.
-6. **Smaller issues:**
+5. **Smaller issues:**
    - Any authenticated user can delete any booking.
    - A rejected or cancelled booking keeps its primary key, so the same room can't be booked again
      at the exact same start time.
