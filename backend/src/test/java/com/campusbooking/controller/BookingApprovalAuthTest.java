@@ -60,6 +60,13 @@ class BookingApprovalAuthTest {
     }
 
     @Test
+    @WithUserDetails("floor.manager2@example.com")
+    void floorManagerOfAnotherRoomCannotApprove() throws Exception {
+        approve("floor.manager2@example.com", "APPROVED").andExpect(status().isForbidden());
+        assertThat(approvalCount()).isZero();
+    }
+
+    @Test
     @WithUserDetails("floor.manager1@example.com")
     void approvalIsRecordedUnderCallerNotBodyEmail() throws Exception {
         approve("security1@example.com", "APPROVED").andExpect(status().isOk());

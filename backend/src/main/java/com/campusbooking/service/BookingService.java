@@ -24,7 +24,6 @@ import com.campusbooking.repository.BookingApprovalRepository;
 import com.campusbooking.repository.BookingRepository; // For atomic operations
 import com.campusbooking.repository.ClubMembershipRepository;
 import com.campusbooking.repository.ClubRepository;
-import com.campusbooking.repository.FloorManagerRepository;
 import com.campusbooking.repository.ProfessorRepository;
 import com.campusbooking.repository.RoomRepository;
 import com.campusbooking.repository.SecurityRepository;
@@ -48,7 +47,6 @@ public class BookingService {
     @Autowired private ClubRepository clubRepository;
     @Autowired private ProfessorRepository professorRepository;
     @Autowired private StudentCouncilRepository studentCouncilRepository;
-    @Autowired private FloorManagerRepository floorManagerRepository;
     @Autowired private SecurityRepository securityRepository;
     @Autowired private ClubMembershipRepository clubMembershipRepository;
 
@@ -215,10 +213,7 @@ public class BookingService {
             return ApproverRole.SECURITY;
         }
 
-        if (floorManagerRepository.existsById(approverEmail)) {
-            return ApproverRole.FLOOR_MANAGER;
-        }
-
+        // A floor manager may approve only rooms they manage (checked first above).
         return null; // Not a recognized approver for this booking context
     }
 
