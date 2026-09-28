@@ -37,9 +37,8 @@ campus-room-booking/
 │       │   └── types/                 # request/response DTOs and enums
 │       └── resources/
 │           ├── application.properties
-│           ├── schema-tables.sql      # tables and constraints
-│           ├── schema-functions.sql   # PL/pgSQL functions used by the triggers
-│           └── schema-triggers.sql    # BEFORE INSERT triggers
+│           └── db/migration/          # Flyway migrations: V1 baseline (tables, functions,
+│                                      #   triggers), V2 no-overlap constraint
 └── frontend/
     └── src/
         ├── App.jsx                    # routes
@@ -141,9 +140,8 @@ are `PENDING`, `APPROVED` and `REJECTED`.
 | `booking` | `(start_time, block, room_no)` | `end_time`, `purpose`, `student_email`, `club_name`, `overall_status` |
 | `booking_approval` | `id` (identity) | FK to booking's composite key; `approver_role`, `approver_email`, `approval_status`, `approval_time`, `comments` |
 
-Every table has a `BEFORE INSERT` trigger (`schema-triggers.sql`) that raises an error when a
-required column is null. The SQL files use `//` as the statement separator
-(`spring.sql.init.separator=//`) because PL/pgSQL bodies contain `;`.
+Every table has a `BEFORE INSERT` trigger (defined in `V1__baseline.sql`) that raises an error when a
+required column is null.
 
 ### Authentication
 

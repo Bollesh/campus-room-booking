@@ -68,3 +68,22 @@ Fix: removed the `FLOOR_MANAGER` fallback in `BookingService.determineApproverRo
 
 Still by design (not changed): any student-council member, any cultural professor and any
 security user can approve any booking, because those roles are campus-wide in this app.
+
+## B4: every restart wiped the database
+
+Before: `spring.sql.init.mode=always` ran `schema-tables.sql` on every start, which began with
+`DROP TABLE ... CASCADE`.
+
+Fix: Flyway. `db/migration/V1__baseline.sql` has the tables, not-null functions and triggers from the
+three old schema files (no DROPs, `;` separators). `V2__no_overlapping_bookings.sql` adds the Step 2
+exclusion constraint, so the history shows the fix. The `spring.sql.init.*` settings and old schema
+files are removed. `compose.yaml` now uses a named volume (`pgdata`), so the data also survives
+`docker compose down`.
+
+Verified 2026-09-29 against the compose Postgres: boot 1 applied V1 + V2 and seeded; created a booking
+(201); restarted; boot 2 reported "Schema is up to date", skipped seeding, and `GET` returned the
+booking (200). All 16 tests pass with Flyway building the schema in Testcontainers.
+
+Existing local databases created by the old `sql.init` setup have no Flyway history, and Flyway
+refuses to migrate a non-empty schema without one. Recreate them once with `docker compose down -v`
+(their data was wiped on every start anyway).
