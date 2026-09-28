@@ -78,7 +78,9 @@ public class BookingService {
              throw new IllegalArgumentException("Booking start and end times cannot be the same.");
         }
         // 1. Validate Room, Student, Club (if provided)
-        if (!roomRepository.existsById(new RoomId(request.getBlock(), request.getRoomNo()))) {
+        // Lock the room row so concurrent bookings of the same room run the conflict check one at a
+        // time. Without it, overlapping inserts race into the exclusion constraint and can deadlock.
+        if (roomRepository.lockRoom(request.getBlock(), request.getRoomNo()).isEmpty()) {
              throw new IllegalArgumentException("Room does not exist.");
         }
         if (!studentRepository.existsById(request.getStudentEmail())) {
@@ -121,8 +123,8 @@ public class BookingService {
         newBooking.setClubName(request.getClubName()); // Can be null
         newBooking.setOverallStatus(BookingStatus.PENDING_APPROVAL);
 
-        // Flush now so a no_overlapping_active_booking violation (a concurrent request won the
-        // race past the check above) is raised here, where it can be translated, not at commit.
+        // Flush now so a no_overlapping_active_booking violation (the constraint is the backstop for
+        // anything that gets past the check above) is raised here, where it can be translated, not at commit.
         try {
             return bookingRepository.saveAndFlush(newBooking);
         } catch (DataIntegrityViolationException e) {

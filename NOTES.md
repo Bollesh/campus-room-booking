@@ -37,6 +37,14 @@ latency. Cause: an exclusion constraint is checked after the index entry is inse
 overlapping concurrent inserts can each wait on the other's transaction. The four clean runs
 reported above were not enough to catch it.
 
+Fix: `createBooking` now takes a row lock on the room (`SELECT 1 FROM room ... FOR NO KEY UPDATE`)
+before the conflict check, so bookings of the same room are checked and inserted one at a time.
+`NO KEY UPDATE` does not conflict with the `FOR KEY SHARE` locks from booking's foreign-key checks.
+After this, 50 of 50 repeated runs: 1 of 20 succeeded, all 19 losers got `BookingConflictException`
+from the conflict SELECT, with no deadlocks, in ~0.2 s per run. The exclusion constraint stays as the
+guarantee for any write that bypasses this path (`constraintRejectsOverlapEvenWhenAppCheckIsBypassed`).
+Trade-off: bookings for one room can't be created in parallel. Different rooms are unaffected.
+
 ## B2: approver / booking owner taken from the request body
 
 Test: `backend/src/test/java/com/campusbooking/controller/BookingApprovalAuthTest.java` (MockMvc,
