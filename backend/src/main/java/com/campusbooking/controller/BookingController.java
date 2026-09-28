@@ -9,6 +9,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -74,14 +76,17 @@ public class BookingController {
 
     // POST /api/bookings - Create a new booking
     @PostMapping
-    public ResponseEntity<?> createBooking(@Valid @RequestBody BookingRequest request) { // Use BookingRequest DTO
+    public ResponseEntity<?> createBooking(@Valid @RequestBody BookingRequest request,
+                                           @AuthenticationPrincipal UserDetails caller) { // Use BookingRequest DTO
         try {
+            // The booking is always made by the authenticated caller; studentEmail in the body is ignored.
+            request.setStudentEmail(caller.getUsername());
+
             // Basic input validation
             if (request.getBlock() == null || request.getBlock().trim().isEmpty() ||
                 request.getRoomNo() == null || request.getRoomNo().trim().isEmpty() ||
-                request.getStartTime() == null ||
-                request.getStudentEmail() == null || request.getStudentEmail().trim().isEmpty()) {
-                return ResponseEntity.badRequest().body("{\"error\": \"Missing required fields: block, roomNo, startTime, studentEmail.\"}");
+                request.getStartTime() == null) {
+                return ResponseEntity.badRequest().body("{\"error\": \"Missing required fields: block, roomNo, startTime.\"}");
             }
 
             // Call the service method
@@ -147,14 +152,13 @@ public class BookingController {
             @PathVariable String block,
             @PathVariable String roomNo,
             @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startTime,
-            @RequestBody ApprovalRequest approvalRequest) { // Use the DTO
+            @RequestBody ApprovalRequest approvalRequest, // Use the DTO
+            @AuthenticationPrincipal UserDetails caller) {
 
         BookingId bookingId = bookingService.createBookingId(block, roomNo, startTime);
 
-        String approverEmail = approvalRequest.getApproverEmail();
-        if (approverEmail == null || approverEmail.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body("Approver email is required in the request body.");
-        }
+        // The approver is the authenticated caller (email is the username); approverEmail in the body is ignored.
+        String approverEmail = caller.getUsername();
 
         ApprovalStatus status;
         try {
@@ -168,7 +172,7 @@ public class BookingController {
         try {
             Booking updatedBooking = bookingService.recordApproval(
                     bookingId,
-                    approverEmail, // Pass the manually provided email
+                    approverEmail,
                     status,
                     approvalRequest.getComments()
             );

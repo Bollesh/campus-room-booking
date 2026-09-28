@@ -20,7 +20,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.security.test.context.support.WithUserDetails;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.campusbooking.TestcontainersConfiguration;
@@ -90,7 +90,7 @@ class BookingOverlapTest {
     }
 
     @Test
-    @WithMockUser
+    @WithUserDetails("poc.student1@example.com")
     void overlappingBookingOverHttpReturns409() throws Exception {
         bookingService.createBooking(request(TEN, TEN.plusHours(2)));
 

@@ -1,7 +1,7 @@
 package com.campusbooking.types;
 
 public class ApprovalRequest {
-    private String approverEmail; 
+    private String approverEmail; // Ignored: the approver is the authenticated caller
     private String status; // "APPROVED" or "REJECTED"
     private String comments;
 
