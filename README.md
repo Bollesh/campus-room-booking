@@ -7,24 +7,31 @@ cultural professor, the room's floor manager and security.
 Forked from [Jawwad2005/DBSProj](https://github.com/Jawwad2005/DBSProj), originally built by
 [Jawwad2005](https://github.com/Jawwad2005) and [ParallelParking](https://github.com/ParallelParking)
 as a database systems course project (April 2025). This README describes the code as it is in the
-fork today. See [Known issues](#known-issues) for what is being fixed.
+fork today. [What I changed](#what-i-changed) lists the bugs fixed in this fork and the tests that
+prove them; [Known issues](#known-issues) lists what is still open.
 
 ## Stack
 
 | Part | Tech |
 |---|---|
 | Backend | Java 21, Spring Boot 3.4.4 (Web, Data JPA, Security, Validation), jjwt 0.11.5 |
-| Database | PostgreSQL, schema in hand-written SQL with PL/pgSQL trigger functions |
+| Database | PostgreSQL 16, schema managed by Flyway migrations (SQL with PL/pgSQL trigger functions) |
 | Frontend | React 19, Vite 6, React Router 7, react-datepicker |
 | Build | Maven wrapper (Maven 3.9.9), npm |
+| Tests | JUnit 5, MockMvc, spring-security-test, Testcontainers (PostgreSQL) |
+| CI | GitHub Actions: `./mvnw -B verify` on every push and pull request |
 
 ## Repository layout
 
 ```
 campus-room-booking/
+├── .github/workflows/ci.yml           # CI: ./mvnw -B verify
+├── NOTES.md                           # measured before/after results for each fix
 ├── backend/
 │   ├── pom.xml, mvnw, .mvn/
+│   ├── compose.yaml                   # local PostgreSQL 16
 │   ├── test.http                      # sample requests (VS Code REST Client / IntelliJ HTTP client)
+│   ├── src/test/java/com/campusbooking/  # Testcontainers-based tests (see Tests)
 │   └── src/main/
 │       ├── java/com/campusbooking/
 │       │   ├── CampusRoomBookingApplication.java
@@ -51,22 +58,24 @@ campus-room-booking/
 ## Running it locally
 
 **Requirements:** a full JDK 21 or newer (a JRE is not enough, because `javac` must exist), Docker
-or a local PostgreSQL, and Node.js 18+.
+(for the database and the tests), and Node.js 18+. If `./mvnw -v` reports a JRE or a different
+Java, point `JAVA_HOME` at the JDK, e.g. `JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./mvnw ...`.
 
 1. **Database.** The backend expects PostgreSQL on `localhost:5432`, database `roombooking`, user
-   `myuser`, password `mypassword` (see `backend/src/main/resources/application.properties`):
+   `myuser`, password `mypassword` (see `backend/src/main/resources/application.properties`).
+   `backend/compose.yaml` starts exactly that, with a named volume for the data:
    ```sh
-   docker run -d --name roombooking-db -p 5432:5432 \
-     -e POSTGRES_DB=roombooking -e POSTGRES_USER=myuser -e POSTGRES_PASSWORD=mypassword \
-     postgres:16
+   cd backend
+   docker compose up -d
    ```
 2. **Backend** (port 8080):
    ```sh
    cd backend
    JWT_SECRET_KEY='<a long random string>' ./mvnw spring-boot:run
    ```
-   Without `JWT_SECRET_KEY` it falls back to a development-only default. On startup the schema
-   scripts run and `DataLoader` inserts the seed data below.
+   Without `JWT_SECRET_KEY` it falls back to a development-only default. On startup Flyway applies
+   any pending migrations from `src/main/resources/db/migration`, and `DataLoader` inserts the seed
+   data below if the `users` table is empty. Data survives restarts.
 3. **Frontend** (port 5173):
    ```sh
    cd frontend
@@ -76,8 +85,10 @@ or a local PostgreSQL, and Node.js 18+.
    API calls go to `http://localhost:8080`, which is hard-coded in the components. CORS allows
    `localhost:5173`, `localhost:3000` and `localhost:8080`.
 
-> **Warning:** every backend start drops and recreates all tables, so data does not survive a
-> restart. See [Known issues](#known-issues).
+> **Upgrading an old local database:** a database created before the switch to Flyway has tables
+> but no Flyway history, and Flyway refuses to start on it. Recreate it once with
+> `docker compose down -v && docker compose up -d` (the old setup wiped its data on every start
+> anyway).
 
 ### Seed accounts
 
@@ -109,13 +120,16 @@ Security role: `ROLE_STUDENT`, `ROLE_PROFESSOR`, `ROLE_FLOOR_MANAGER`, `ROLE_SEC
 ### Booking lifecycle
 
 1. A student who is a member of a club books a room for a time range (`POST /api/bookings`).
-   The service checks that the room, student and club exist, that the student is in the club, and
-   that no other booking overlaps the range (rejected and cancelled bookings are ignored). The
-   booking starts as `PENDING_APPROVAL`.
+   The booking is made in the name of the logged-in student (from the JWT). The service locks the
+   room row, checks that the room, student and club exist, that the student is in the club, and
+   that no other active booking overlaps the range (rejected and cancelled bookings are ignored).
+   An overlap returns **409 Conflict**. The database enforces the same rule with an exclusion
+   constraint. The booking starts as `PENDING_APPROVAL`.
 2. Each approver submits `APPROVED` or `REJECTED`
-   (`POST /api/bookings/{block}/{roomNo}/{startTime}/approvals`). The backend works out the
-   approver's role for that booking from their email: floor manager of the room, faculty head of the
-   club, cultural professor, student council, or security. Each role can respond once per booking.
+   (`POST /api/bookings/{block}/{roomNo}/{startTime}/approvals`). The approver is the logged-in
+   user (from the JWT). The backend works out their role for that booking: floor manager of that
+   room, faculty head of the club, cultural professor, student council, or security. Anyone else
+   gets **403**. Each role can respond once per booking.
 3. After every response the overall status is recomputed:
    - any rejection -> `REJECTED`
    - approvals from all of `FACULTY_HEAD`, `STUDENT_COUNCIL`, `CULTURAL_PROF`, `FLOOR_MANAGER` and
@@ -183,7 +197,6 @@ Example booking request body:
   "startTime": "2026-10-01T10:00:00",
   "endTime": "2026-10-01T12:00:00",
   "purpose": "Tech Club meetup",
-  "studentEmail": "poc.student1@example.com",
   "clubName": "Tech Club"
 }
 ```
@@ -191,8 +204,12 @@ Example booking request body:
 Example approval request body:
 
 ```json
-{ "approverEmail": "floor.manager1@example.com", "status": "APPROVED", "comments": "ok" }
+{ "status": "APPROVED", "comments": "ok" }
 ```
+
+Both requests need an `Authorization: Bearer <jwt>` header from `POST /api/auth/login`. The student
+and approver come from that token. A `studentEmail` or `approverEmail` field in the body is ignored
+(the frontend still sends them).
 
 There are more example requests in `backend/test.http`.
 
@@ -216,32 +233,102 @@ does not filter bookings by role.
 
 ## Tests
 
-The only test is `CampusRoomBookingApplicationTests`, and it only checks that the Spring context
-starts. It needs the database running.
+```sh
+cd backend
+./mvnw verify
+```
+
+The tests need Docker: each Spring test context starts its own PostgreSQL 16 container
+(Testcontainers) and Flyway builds the schema in it, so they run against the real triggers and
+constraints, not H2. They do not use the database from `compose.yaml`.
+
+| Test | What it checks |
+|---|---|
+| `BookingConcurrencyTest` | 20 threads book the same room with overlapping times at once; exactly 1 succeeds and the other 19 get a conflict |
+| `BookingOverlapTest` | overlaps rejected (409 over HTTP); overlap with a rejected or cancelled booking allowed; back-to-back allowed; the database rejects an overlapping raw `INSERT` |
+| `BookingApprovalAuthTest` | approver and booking owner come from the JWT; students and floor managers of other rooms get 403; all five approvals -> `APPROVED`, one rejection -> `REJECTED` |
+| `CampusRoomBookingApplicationTests` | the application context starts |
+
+CI (`.github/workflows/ci.yml`) runs `./mvnw -B verify` on every push and pull request.
+
+## What I changed
+
+The original project is by [Jawwad2005](https://github.com/Jawwad2005) and
+[ParallelParking](https://github.com/ParallelParking)
+([upstream repo](https://github.com/Jawwad2005/DBSProj)). In this fork I found four bugs by reading
+the code, confirmed each one with a test that failed before the fix, and then fixed it. Measured
+numbers and details are in [`NOTES.md`](NOTES.md).
+
+### 1. Double booking under concurrent requests
+
+- **Found:** `BookingService.createBooking` runs a conflict `SELECT` and then an `INSERT`. Under
+  PostgreSQL's default READ COMMITTED isolation, concurrent transactions don't see each other's
+  uncommitted rows, so several overlapping requests can all pass the check. The primary key
+  `(start_time, block, room_no)` only blocks an identical start time.
+- **Proved:** `BookingConcurrencyTest` sends 20 overlapping requests for one room at once, with
+  different start times so the primary key can't help. Before the fix, **10 of 20 succeeded** on
+  every run (10 is the connection pool size: those 10 all ran the check before any committed).
+- **Fixed:**
+  - A PostgreSQL exclusion constraint, `no_overlapping_active_booking`
+    (`EXCLUDE USING gist (block WITH =, room_no WITH =, tsrange(start_time, end_time) WITH &&)` for
+    `PENDING_APPROVAL` and `APPROVED` bookings), so the database itself rejects overlaps.
+  - `createBooking` locks the room row (`SELECT ... FOR NO KEY UPDATE`) before the check, so
+    bookings of the same room are checked one at a time. Without the lock, concurrent overlapping
+    inserts could deadlock inside the constraint check: in 31 of 50 repeated runs the losers got a
+    deadlock error (a 500) after up to ~20 s.
+  - Overlaps return **409 Conflict** (`BookingConflictException`), whether caught by the check or by
+    the constraint (`saveAndFlush` raises the violation inside the method, where it's translated).
+- **Result:** 1 of 20 succeeds and the other 19 get a 409, on 50 of 50 runs.
+
+### 2. Caller identity taken from the request body
+
+- **Found:** `approverEmail` (approvals) and `studentEmail` (bookings) were read from the JSON body.
+- **Proved:** `BookingApprovalAuthTest`. Before the fix, a student approved a booking as the floor
+  manager (200), an approval was recorded under the email in the body instead of the caller's, and a
+  student booked a room in another student's name (201).
+- **Fixed:** `BookingController` takes both from the authenticated user (`@AuthenticationPrincipal`,
+  set from the JWT) and ignores the body fields. The frontend didn't need changes.
+
+### 3. Floor managers could approve any room
+
+- **Found:** `determineApproverRole` fell back to `FLOOR_MANAGER` for any floor manager.
+- **Proved:** the floor manager of AB2/101 approved an AB1/101 booking (200).
+- **Fixed:** removed the fallback. Only the manager of the booked room gets `FLOOR_MANAGER`; others
+  get 403.
+
+### 4. Every restart wiped the database
+
+- **Found:** `spring.sql.init.mode=always` ran `schema-tables.sql` on every start, and it began with
+  `DROP TABLE ... CASCADE`.
+- **Fixed:** the schema is managed by Flyway. `V1__baseline.sql` has the original tables, functions
+  and triggers; `V2__no_overlapping_bookings.sql` adds the constraint from fix 1.
+- **Verified:** created a booking, restarted the app, and the booking was still there.
+
+### Also added
+
+- A test suite on real PostgreSQL via Testcontainers (see [Tests](#tests)); before, the only test
+  checked that the context starts.
+- `backend/compose.yaml` for the local database, and CI on GitHub Actions.
 
 ## Known issues
 
-These were found by reading the code. They are being confirmed with tests and fixed in this fork.
+Still open. Items 1 and 2 were found while fixing the bugs above.
 
-1. **Double booking under concurrent requests.** The overlap check is a `SELECT` followed by an
-   `INSERT`, so two overlapping requests arriving together can both pass. The primary key only
-   blocks an identical start time.
-2. **Caller identity is taken from the request body.** `approverEmail` (approvals) and
-   `studentEmail` (bookings) come from the JSON, not the JWT, so a logged-in user can act as
-   someone else.
-3. **Approver roles are too broad.** Any floor manager is accepted as `FLOOR_MANAGER`, even for
-   rooms they do not manage. Any student council member, cultural professor or security user can
-   approve any booking.
-4. **Data is wiped on every restart.** `spring.sql.init.mode=always` runs `schema-tables.sql`,
-   which drops all tables first.
-5. **Anyone can register as any role**, including `SECURITY` and `FLOOR_MANAGER`, through the public
+1. **Password hashes in API responses.** Booking responses embed the student, the room's manager
+   and the club's faculty head and point of contact, and each includes its bcrypt `password` hash.
+   `GET /api/bookings` returns these to any logged-in user.
+2. **Any user can list anyone's bookings.** `GET /api/bookings?studentEmail=` trusts the query
+   parameter.
+3. **Anyone can register as any role**, including `SECURITY` and `FLOOR_MANAGER`, through the public
    register endpoint.
-6. **Access rules that don't match the controllers.**
+4. **Campus-wide approvers.** Any student council member, cultural professor or security user can
+   approve any booking. This may be intended, since those roles aren't tied to a room or club.
+5. **Access rules that don't match the controllers.**
    - `SecurityConfig` protects `/api/student-council/**`, but the controller is at
      `/api/studentcouncil`, so that rule never matches.
    - Student council members get only `ROLE_STUDENT_COUNCIL`, so they are refused on
      `GET /api/rooms` and `GET /api/memberships/student/**`, which require `STUDENT`.
-7. **Smaller issues:**
+6. **Smaller issues:**
    - Any authenticated user can delete any booking.
    - A rejected or cancelled booking keeps its primary key, so the same room can't be booked again
      at the exact same start time.
