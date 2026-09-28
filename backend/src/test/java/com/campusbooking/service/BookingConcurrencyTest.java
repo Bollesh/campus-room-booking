@@ -81,6 +81,8 @@ class BookingConcurrencyTest {
 
         assertThat(successes.get()).isEqualTo(1);
         assertThat(rows).isEqualTo(1);
+        // Losers must get the conflict error (409), whether the SELECT or the constraint caught them.
+        assertThat(failures.keySet()).containsOnly(BookingConflictException.class.getSimpleName());
     }
 
     static BookingRequest request(LocalDateTime start, LocalDateTime end) {

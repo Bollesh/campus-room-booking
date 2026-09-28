@@ -1,5 +1,6 @@
 package com.campusbooking.service;
 
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.List;
@@ -9,6 +10,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,6 +37,9 @@ import com.campusbooking.types.BookingStatus;
 
 @Service
 public class BookingService {
+
+    // Postgres SQLState for exclusion_violation
+    private static final String EXCLUSION_VIOLATION = "23P01";
 
     @Autowired private BookingRepository bookingRepository;
     @Autowired private BookingApprovalRepository bookingApprovalRepository;
@@ -102,7 +107,7 @@ public class BookingService {
             String conflicts = conflictingBookings.stream()
                 .map(b -> String.format("Conflict with booking from %s to %s", b.getStartTime(), b.getEndTime()))
                 .collect(Collectors.joining(", "));
-             throw new IllegalStateException("Time slot conflict for room " + request.getBlock() + "/" + request.getRoomNo() +
+             throw new BookingConflictException("Time slot conflict for room " + request.getBlock() + "/" + request.getRoomNo() +
                                             " between " + request.getStartTime() + " and " + request.getEndTime() + ". " + conflicts);
         }
 
@@ -118,9 +123,27 @@ public class BookingService {
         newBooking.setClubName(request.getClubName()); // Can be null
         newBooking.setOverallStatus(BookingStatus.PENDING_APPROVAL);
 
-        Booking savedBooking = bookingRepository.save(newBooking);
+        // Flush now so a no_overlapping_active_booking violation (a concurrent request won the
+        // race past the check above) is raised here, where it can be translated, not at commit.
+        try {
+            return bookingRepository.saveAndFlush(newBooking);
+        } catch (DataIntegrityViolationException e) {
+            if (EXCLUSION_VIOLATION.equals(sqlState(e))) {
+                throw new BookingConflictException("Time slot conflict for room " + request.getBlock() + "/" + request.getRoomNo() +
+                                                   " between " + request.getStartTime() + " and " + request.getEndTime() +
+                                                   ": another booking for this slot was just made.", e);
+            }
+            throw e;
+        }
+    }
 
-        return savedBooking; // Return the created booking
+    private static String sqlState(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof SQLException sqlException) {
+                return sqlException.getSQLState();
+            }
+        }
+        return null;
     }
 
 

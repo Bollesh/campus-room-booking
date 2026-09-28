@@ -23,6 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.campusbooking.model.Booking;
 import com.campusbooking.model.BookingId;
+import com.campusbooking.service.BookingConflictException;
 import com.campusbooking.service.BookingService;
 import com.campusbooking.types.ApprovalRequest;
 import com.campusbooking.types.ApprovalStatus;
@@ -89,6 +90,9 @@ public class BookingController {
             // returning the created Booking object.
             return ResponseEntity.status(HttpStatus.CREATED).body(createdBooking); // 201 Created
 
+        } catch (BookingConflictException e) {
+            // Overlaps an active booking of the same room
+            return ResponseEntity.status(HttpStatus.CONFLICT).body("{\"error\": \"" + e.getMessage() + "\"}"); // 409 Conflict
         } catch (IllegalArgumentException | IllegalStateException e) {
             // Handle validation errors from the service (room/student/club/equipment not found, conflict)
             return ResponseEntity.badRequest().body("{\"error\": \"" + e.getMessage() + "\"}"); // 400 Bad Request
