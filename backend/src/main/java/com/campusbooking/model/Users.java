@@ -1,5 +1,7 @@
 package com.campusbooking.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -14,6 +16,9 @@ public class Users {
     private String name;
     private Long phone;
 
+    // Bcrypt hash. Accepted in request bodies (create/update endpoints) but never serialized:
+    // users are embedded in booking and club responses.
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     @Column(nullable = false)
     private String password;
 
