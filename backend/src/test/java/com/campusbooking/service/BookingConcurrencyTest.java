@@ -85,6 +85,44 @@ class BookingConcurrencyTest {
         assertThat(failures.keySet()).containsOnly(BookingConflictException.class.getSimpleName());
     }
 
+    @Test
+    void concurrentBookingsWithSameStartTime_onlyOneSucceeds() throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(THREADS);
+        CountDownLatch ready = new CountDownLatch(THREADS);
+        CountDownLatch startGate = new CountDownLatch(1);
+        AtomicInteger successes = new AtomicInteger();
+        Map<String, AtomicInteger> failures = new ConcurrentHashMap<>();
+
+        List<Future<?>> futures = new ArrayList<>();
+        for (int i = 0; i < THREADS; i++) {
+            // Same start time: all requests also collide on the (start_time, block, room_no) PK.
+            BookingRequest request = request(BASE, BASE.plusHours(1).plusMinutes(i));
+            futures.add(pool.submit(() -> {
+                ready.countDown();
+                startGate.await();
+                try {
+                    bookingService.createBooking(request);
+                    successes.incrementAndGet();
+                } catch (Exception e) {
+                    failures.computeIfAbsent(e.getClass().getSimpleName(), k -> new AtomicInteger()).incrementAndGet();
+                }
+                return null;
+            }));
+        }
+
+        ready.await(10, TimeUnit.SECONDS);
+        startGate.countDown();
+        for (Future<?> f : futures) {
+            f.get(60, TimeUnit.SECONDS);
+        }
+        pool.shutdown();
+
+        System.out.printf("SAME-START RESULT: %d of %d succeeded, failures=%s%n", successes.get(), THREADS, failures);
+
+        assertThat(successes.get()).isEqualTo(1);
+        assertThat(failures.keySet()).containsOnly(BookingConflictException.class.getSimpleName());
+    }
+
     static BookingRequest request(LocalDateTime start, LocalDateTime end) {
         BookingRequest r = new BookingRequest();
         r.setBlock("AB1");
